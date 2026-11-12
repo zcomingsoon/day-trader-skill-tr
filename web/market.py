@@ -6,6 +6,13 @@ import math
 from pathlib import Path
 import re
 import urllib.request
+import time
+import threading
+from collections import OrderedDict
+from .indicators import analyze
+
+_CACHE = OrderedDict()
+_LOCK = threading.Lock()
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('legacy_scan', ROOT / 'trader-scanner/scan.py')
@@ -31,6 +38,12 @@ def chart(symbol, market, period='daily', source='demo'):
     symbol = normalize(symbol, market)
     if period not in ('daily', 'intraday') or source not in ('demo', 'yahoo'):
         raise ValueError('Geçersiz dönem veya veri kaynağı.')
+    now = int(time.time())
+    key = (symbol, market, period, source)
+    with _LOCK:
+        cached = _CACHE.get(key)
+        if cached and now - cached['fetched_at'] < 30:
+            return {**cached, 'cached': True}
     currency = 'TRY' if market == 'BIST' else 'USD'
     if source == 'demo':
         base = 280 if market == 'BIST' else 200
@@ -39,7 +52,7 @@ def chart(symbol, market, period='daily', source='demo'):
         step = 86400 if period == 'daily' else 300
         points = [{'time': int(end - (79-i)*step), 'close': round(base + i*.15 + math.sin(i/4)*2, 2)} for i in range(80)]
     else:
-        interval, rng = ('1d', '6mo') if period == 'daily' else ('5m', '5d')
+        interval, rng = ('1d', '2y') if period == 'daily' else ('5m', '5d')
         url = 'https://query1.finance.yahoo.com/v8/finance/chart/%s?range=%s&interval=%s' % (symbol, rng, interval)
         req = urllib.request.Request(url, headers={'User-Agent': scan.UA})
         with urllib.request.urlopen(req, timeout=15) as response:
@@ -48,15 +61,35 @@ def chart(symbol, market, period='daily', source='demo'):
         if not results:
             raise ValueError('Piyasa verisi bulunamadı.')
         series = scan.series_from_result(results[0])
+        if series['meta'].get('symbol') != symbol:
+            raise ValueError('Sağlayıcının sembolü istekle eşleşmiyor.')
         if series['meta'].get('currency') != currency:
             raise ValueError('Verinin para birimi hesapla eşleşmiyor.')
         points = [{'time': t, 'close': float(c)} for t, c in zip(series['t'], series['c'])
-                  if c is not None and math.isfinite(c) and c > 0]
+                  if isinstance(t, (int, float)) and 0 < t <= now + 60
+                  and isinstance(c, (int, float)) and math.isfinite(c) and c > 0]
+        if any(a['time'] >= b['time'] for a,b in zip(points, points[1:])):
+            raise ValueError('Sağlayıcının zaman dizisi geçersiz.')
     if len(points) < 21:
         raise ValueError('Analiz için yeterli veri yok.')
     closes = [p['close'] for p in points]
-    return {'symbol': symbol, 'market': market, 'currency': currency, 'source': source,
+    result = {'symbol': symbol, 'market': market, 'currency': currency, 'source': source,
             'period': period, 'points': points, 'price': closes[-1],
             'as_of': points[-1]['time'], 'change_pct': round((closes[-1]/closes[-2]-1)*100, 2),
-            'sma20': round(sum(closes[-20:])/20, 2), 'rsi14': scan.rsi(closes),
             'live_orders_enabled': False}
+    indicators = analyze(closes)
+    result.update(sma20=indicators['sma20'], rsi14=indicators['rsi14'], indicators=indicators,
+                  fetched_at=int(time.time()), cached=False, is_demo=source == 'demo',
+                  delay_minutes=15 if market == 'BIST' and source == 'yahoo' else None,
+                  delay_label=('Örnek veri · piyasa fiyatı değil' if source == 'demo' else
+                               '15 dakika gecikmeli · anlık lisans yok' if market == 'BIST' else
+                               'Gecikme borsaya göre değişir · anlık garanti yok'),
+                  source_label='Demo' if source == 'demo' else 'Yahoo Finance · resmi olmayan uç nokta',
+                  price_kind='Son mum kapanışı',
+                  stale=source != 'demo' and now-points[-1]['time'] > (900 if period == 'intraday' else 3*86400))
+    with _LOCK:
+        _CACHE[key] = result
+        _CACHE.move_to_end(key)
+        while len(_CACHE) > 128:
+            _CACHE.popitem(last=False)
+    return result
