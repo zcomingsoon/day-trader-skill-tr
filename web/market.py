@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import re
 import urllib.request
+from .analysis import explain
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('legacy_scan', ROOT / 'trader-scanner/scan.py')
@@ -39,7 +40,7 @@ def chart(symbol, market, period='daily', source='demo'):
         step = 86400 if period == 'daily' else 300
         points = [{'time': int(end - (79-i)*step), 'close': round(base + i*.15 + math.sin(i/4)*2, 2)} for i in range(80)]
     else:
-        interval, rng = ('1d', '6mo') if period == 'daily' else ('5m', '5d')
+        interval, rng = ('1d', '2y') if period == 'daily' else ('5m', '5d')
         url = 'https://query1.finance.yahoo.com/v8/finance/chart/%s?range=%s&interval=%s' % (symbol, rng, interval)
         req = urllib.request.Request(url, headers={'User-Agent': scan.UA})
         with urllib.request.urlopen(req, timeout=15) as response:
@@ -50,7 +51,13 @@ def chart(symbol, market, period='daily', source='demo'):
         series = scan.series_from_result(results[0])
         if series['meta'].get('currency') != currency:
             raise ValueError('Verinin para birimi hesapla eşleşmiyor.')
-        points = [{'time': t, 'close': float(c)} for t, c in zip(series['t'], series['c'])
+        def number_at(key, i):
+            values = series.get(key)
+            value = values[i] if values and i < len(values) else None
+            return float(value) if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0 else None
+        points = [{'time': t, 'close': float(c), 'high': number_at('h', i),
+                   'low': number_at('l', i), 'volume': number_at('v', i)}
+                  for i, (t, c) in enumerate(zip(series['t'], series['c']))
                   if c is not None and math.isfinite(c) and c > 0]
     if len(points) < 21:
         raise ValueError('Analiz için yeterli veri yok.')
@@ -59,4 +66,9 @@ def chart(symbol, market, period='daily', source='demo'):
             'period': period, 'points': points, 'price': closes[-1],
             'as_of': points[-1]['time'], 'change_pct': round((closes[-1]/closes[-2]-1)*100, 2),
             'sma20': round(sum(closes[-20:])/20, 2), 'rsi14': scan.rsi(closes),
+            'analysis': explain(points, scan.rsi(closes)),
+            'data_notice': ('DEMO: Sabit örnek veridir; gerçek piyasa analizi değildir.' if source == 'demo' else
+                            'Yahoo Finance: resmi olmayan veri. Fiyat son mum kapanışıdır. ' +
+                            ('BIST verisi gecikmeli olabilir (yaklaşık 15 dakika); kesin gecikme doğrulanmadı.' if market == 'BIST' else 'ABD verisinin kesin gecikmesi doğrulanmadı.') +
+                            ' Mum zamanı fiyatın alındığı an değildir; piyasa kapalıyken eski kalabilir.'),
             'live_orders_enabled': False}

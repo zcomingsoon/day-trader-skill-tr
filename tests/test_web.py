@@ -70,6 +70,15 @@ class Web(unittest.TestCase):
         self.assertEqual(self.request('/api/logout',{},headers)[0],200)
         self.assertEqual(self.request('/api/portfolio',headers=headers)[0],401)
 
+    def test_chart_includes_free_analysis(self):
+        headers = self.login()
+        status, _, body = self.request('/api/chart?symbol=THYAO&market=BIST&source=demo', headers=headers)
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertEqual(result['analysis']['method'], 'rules')
+        self.assertIn('DEMO', result['data_notice'])
+        self.assertFalse(result['live_orders_enabled'])
+
     def test_bad_password_limit_and_malformed_login(self):
         self.assertEqual(self.request('/api/login',[])[0],400)
         for _ in range(5):
