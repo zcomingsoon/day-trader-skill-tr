@@ -3,7 +3,7 @@ const $=id=>document.getElementById(id);
 let quote=null, token='', busy=false, generation=0;
 const money=(n,c)=>new Intl.NumberFormat('tr-TR',{style:'currency',currency:c}).format(n);
 const message=text=>{$('message').textContent=text;};
-async function api(path,options){const r=await fetch(path,options);const d=await r.json();if(!r.ok)throw Error(d.error||'İstek tamamlanamadı.');return d;}
+async function api(path,options){const r=await fetch(path,options);const d=await r.json();if(r.status===401){location.assign('/login');throw Error('Oturum sona erdi.');}if(!r.ok)throw Error(d.error||'İstek tamamlanamadı.');return d;}
 function selection(){return {symbol:$('symbol').value.trim().toUpperCase(),market:$('market').value,period:$('period').value,source:$('source').value};}
 function row(target,values){const tr=document.createElement('tr');for(const value of values){const td=document.createElement('td');td.textContent=value;tr.append(td);}target.append(tr);}
 function renderPortfolio(p){$('cash').textContent=money(p.cash/100,p.currency);$('cost').textContent=money(p.positions.reduce((n,x)=>n+x.cost,0)/100,p.currency);$('pnl').textContent=money(p.realized_pnl/100,p.currency);$('account').textContent=`${p.source==='demo'?'Demo':'Piyasa'} · ${p.currency}`;$('positions').replaceChildren();$('history').replaceChildren();for(const x of p.positions)row($('positions'),[x.symbol,x.qty,money(x.cost/x.qty/100,p.currency),money(x.stop/100,p.currency)]);if(!p.positions.length)row($('positions'),['Henüz açık pozisyon yok.']);for(const x of p.trades)row($('history'),[new Date(x.at).toLocaleString('tr-TR'),x.symbol,x.side==='buy'?'Sanal alım':'Sanal satış',x.qty,money(x.price/100,p.currency),money(x.pnl/100,p.currency)]);if(!p.trades.length)row($('history'),['Henüz sanal işlem yok.']);}
@@ -16,3 +16,5 @@ $('symbol').oninput=()=>{quote=null;$('submit').disabled=true;message('Sembol de
 $('qty').oninput=estimate;$('stop').oninput=estimate;$('side').onchange=()=>{$('stop').required=$('side').value==='buy';$('stop').disabled=$('side').value==='sell';};
 $('trade').onsubmit=async e=>{e.preventDefault();if(!quote||busy)return;busy=true;$('submit').disabled=true;const s=selection();try{const p=await api('/api/trades',{method:'POST',headers:{'Content-Type':'application/json','X-Paper-Token':token},body:JSON.stringify({symbol:quote.symbol,market:quote.market,source:quote.source,side:$('side').value,qty:Number($('qty').value),stop:$('stop').value})});if(s.source===selection().source&&s.market===selection().market)renderPortfolio(p);message('Sanal işlem kaydedildi. Gerçek emir gönderilmedi.');}catch(err){message(err.message);}finally{busy=false;$('submit').disabled=!quote;}};
 (async()=>{try{token=(await api('/api/session')).token;await refresh();}catch(e){message(e.message);}})();
+
+$('logout').onclick=async()=>{try{await api('/api/logout',{method:'POST',headers:{'X-Paper-Token':token}});location.assign('/login');}catch(e){message(e.message);}};

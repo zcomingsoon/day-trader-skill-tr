@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.web-data/
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+*.zip
+web-eski-yedek/
+yeni-surum/
+
+paket-kontrol/

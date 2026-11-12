@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 import unittest
 
 from _load import ROOT
@@ -24,12 +25,15 @@ def frontmatter(path):
     return (m.group(1) if m else ""), text
 
 
+def source_paths():
+    return subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard"], cwd=ROOT, text=True).splitlines()
+
+
 def every_text_file():
-    for base, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
-        for f in files:
-            if f.endswith((".md", ".py", ".json", ".csv", ".txt", ".xml")) or f == "LICENSE":
-                yield os.path.join(base, f)
+    for rel in source_paths():
+        path = os.path.join(ROOT, rel)
+        if os.path.isfile(path) and not rel.endswith((".pyc", ".zip")):
+            yield path
 
 
 class Repo(unittest.TestCase):
@@ -39,8 +43,8 @@ class Repo(unittest.TestCase):
         self.assertEqual(found, sorted(SKILLS))
 
     def test_root_matches_the_reel(self):
-        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git"))
-        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "README.md", "tests"] + SKILLS))
+        root = sorted({p.split("/")[0] for p in source_paths() if not p.startswith(".git")})
+        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "README.md", "tests", "web"] + SKILLS))
 
     def test_frontmatter_name_and_description(self):
         for s in SKILLS:

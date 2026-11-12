@@ -4,7 +4,8 @@ import json
 import logging
 import os
 from pathlib import Path
-import secrets
+import hmac
+from .auth import Auth
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from .market import chart
@@ -13,17 +14,21 @@ from .store import Store
 STATIC = Path(__file__).parent / 'static'
 
 
-def make_server(host, port, db_path):
-    store = Store(db_path)
-    token = secrets.token_urlsafe(32)
+def make_handler(db_path, password_hash=None, secure_cookie=True):
+    auth = Auth(password_hash or os.environ.get('PAPER_PASSWORD_HASH'), secure_cookie)
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    store = Store(db_path, os.environ.get('DATABASE_URL'))
 
     class Handler(BaseHTTPRequestHandler):
-        def send(self, status, data, content_type='application/json; charset=utf-8'):
+        def send(self, status, data, content_type='application/json; charset=utf-8', cookie=None):
             body = json.dumps(data, ensure_ascii=False, allow_nan=False).encode() if content_type.startswith('application/json') else data
             self.send_response(status)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
+            self.send_header('Referrer-Policy', 'no-referrer')
+            if cookie:
+                self.send_header('Set-Cookie', cookie)
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'")
             self.end_headers()
@@ -37,6 +42,18 @@ def make_server(host, port, db_path):
             try:
                 if path == '/api/health':
                     return self.send(200, {'status':'ok','live_orders_enabled':False})
+                if path in ('/login', '/login.js', '/style.css'):
+                    name = {'/login':'login.html','/login.js':'login.js','/style.css':'style.css'}[path]
+                    mime = 'text/javascript' if name.endswith('.js') else 'text/css' if name.endswith('.css') else 'text/html'
+                    return self.send(200, (STATIC/name).read_bytes(), mime+'; charset=utf-8')
+                token = auth.session(self.headers)
+                if not token:
+                    if path == '/':
+                        self.send_response(303)
+                        self.send_header('Location', '/login')
+                        self.end_headers()
+                        return
+                    return self.send(401, {'error':'Giriş yapmanız gerekiyor.'})
                 if path == '/api/session':
                     return self.send(200, {'token':token,'live_orders_enabled':False})
                 if path == '/api/chart':
@@ -58,10 +75,32 @@ def make_server(host, port, db_path):
                 self.send(502, {'error':'Veri alınamadı. Sağlayıcı bağlantısını kontrol edin; demo kaynağını ayrıca seçebilirsiniz.'})
 
         def do_POST(self):
-            if urlparse(self.path).path != '/api/trades':
-                return self.send(404, {'error':'Bulunamadı.'})
-            if self.headers.get('X-Paper-Token') != token or self.headers.get('Sec-Fetch-Site') == 'cross-site':
+            path = urlparse(self.path).path
+            if self.headers.get('Sec-Fetch-Site') == 'cross-site':
+                return self.send(403, {'error':'Geçersiz istek kaynağı.'})
+            if path == '/api/login':
+                # JSON content type prevents cross-origin form submissions; no CORS allowed.
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < length <= 4096 or self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                        raise ValueError()
+                    data = json.loads(self.rfile.read(length))
+                    if not isinstance(data, dict):
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    return self.send(400, {'error':'Geçersiz giriş isteği.'})
+                status, sid = auth.login(data.get('password'))
+                return self.send(status, {'ok':True} if sid else {'error':'Giriş yapılamadı. Bilgilerinizi kontrol edin; çok sayıda denemeden sonra 5 dakika bekleyin.'}, cookie=auth.cookie(sid) if sid else None)
+            token = auth.session(self.headers)
+            if not token:
+                return self.send(401, {'error':'Giriş yapmanız gerekiyor.'})
+            if not hmac.compare_digest(self.headers.get('X-Paper-Token', ''), token):
                 return self.send(403, {'error':'Geçersiz oturum.'})
+            if path == '/api/logout':
+                auth.logout(self.headers)
+                return self.send(200, {'ok':True}, cookie=auth.cookie(expired=True))
+            if path != '/api/trades':
+                return self.send(404, {'error':'Bulunamadı.'})
             try:
                 length = int(self.headers.get('Content-Length','0'))
                 if not 0 < length <= 4096:
@@ -80,7 +119,10 @@ def make_server(host, port, db_path):
                 logging.exception('Sanal işlem başarısız')
                 self.send(502, {'error':'Sanal işlem tamamlanamadı. Veri kaynağını kontrol edin.'})
 
-    return ThreadingHTTPServer((host,port),Handler)
+    return Handler
+
+def make_server(host, port, db_path, password_hash=None, secure_cookie=True):
+    return ThreadingHTTPServer((host,port), make_handler(db_path, password_hash, secure_cookie))
 
 
 def main():
@@ -90,7 +132,9 @@ def main():
     parser.add_argument('--db',default=os.environ.get('PAPER_DB','.web-data/paper.sqlite3'))
     args = parser.parse_args()
     Path(args.db).parent.mkdir(parents=True,exist_ok=True)
-    server = make_server(args.host,args.port,args.db)
+    if os.environ.get('RENDER'):
+        parser.error('Bulutta Gunicorn/WSGI başlangıcını kullanın; web/DEPLOYMENT.md dosyasını okuyun.')
+    server = make_server(args.host,args.port,args.db, secure_cookie=os.environ.get('PAPER_LOCAL_HTTP') != '1')
     print('Day Trader TR: http://%s:%s | Yalnızca sanal işlem' % (args.host,args.port), flush=True)
     try:
         server.serve_forever()

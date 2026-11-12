@@ -15,8 +15,9 @@ def cents(value):
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, database_url=None):
         self.path = str(path)
+        self.database_url = database_url
         with self.connect() as db:
             db.executescript('''
             CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, cash INTEGER NOT NULL);
@@ -25,6 +26,9 @@ class Store:
             ''')
 
     def connect(self):
+        if self.database_url:
+            from .postgres import Connection
+            return Connection(self.database_url)
         return sqlite3.connect(self.path, timeout=10)
 
     def snapshot(self, source, currency):
