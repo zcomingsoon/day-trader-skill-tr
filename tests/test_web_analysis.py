@@ -5,6 +5,10 @@ from web.market import chart
 
 
 class Analysis(unittest.TestCase):
+    def setUp(self):
+        from web.market import _CACHE
+        _CACHE.clear()
+
     def test_constant_and_linear_ema_macd(self):
         self.assertEqual(ema_series([10]*40,20), [10]*21)
         result = explain([{'close':10} for _ in range(220)],50)['indicators']
@@ -26,7 +30,7 @@ class Analysis(unittest.TestCase):
         self.assertIsNone(indicators['volume'])
         self.assertIsNone(indicators['volume_ratio'])
         self.assertIsNone(indicators['ema']['200'])
-        self.assertIn('DEMO',result['data_notice'])
+        self.assertTrue(result['is_demo'])
         self.assertFalse(result['live_orders_enabled'])
         short = explain([{'close':10} for _ in range(21)],None)['indicators']
         self.assertIsNone(short['macd'])
@@ -34,7 +38,7 @@ class Analysis(unittest.TestCase):
 
     def test_yahoo_preserves_volume_alignment_after_missing_close(self):
         import io, json
-        data = {'chart':{'result':[{'meta':{'currency':'USD'},'timestamp':list(range(220)),
+        data = {'chart':{'result':[{'meta':{'currency':'USD','symbol':'AAPL'},'timestamp':list(range(220)),
                 'indicators':{'quote':[{'close':[None]+[10]*219,'high':[11]*220,
                                       'low':[9]*220,'volume':list(range(220))}]}}]}}
         with patch('web.market.urllib.request.urlopen',return_value=io.BytesIO(json.dumps(data).encode())):
@@ -42,4 +46,5 @@ class Analysis(unittest.TestCase):
         self.assertEqual(result['points'][0]['volume'],1)
         self.assertEqual(result['analysis']['indicators']['volume'],219)
         self.assertEqual(result['analysis']['indicators']['ema']['200'],10)
-        self.assertIn('kesin gecikmesi doğrulanmadı',result['data_notice'])
+        self.assertIn('Gecikme borsaya göre',result['data_notice'])
+        self.assertEqual(result['analysis']['indicators']['macd'],result['indicators']['macd'])

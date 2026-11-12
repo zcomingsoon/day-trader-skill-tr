@@ -76,7 +76,7 @@ class Web(unittest.TestCase):
         self.assertEqual(status, 200)
         result = json.loads(body)
         self.assertEqual(result['analysis']['method'], 'rules')
-        self.assertIn('DEMO', result['data_notice'])
+        self.assertTrue(result['is_demo'])
         self.assertFalse(result['live_orders_enabled'])
 
     def test_bad_password_limit_and_malformed_login(self):

@@ -10,7 +10,7 @@ def ema_series(values, period):
     return result
 
 
-def explain(points, rsi):
+def explain(points, rsi, indicators=None):
     closes = [p['close'] for p in points]
     price = closes[-1]
     def fmt(value):
@@ -22,6 +22,9 @@ def explain(points, rsi):
     macd = macds[-1] if macds else None
     signal = signals[-1] if signals else None
     histogram = macd-signal if signal is not None else None
+    if indicators is not None:
+        emas = {str(n): indicators['ema'+str(n)] for n in (20,50,200)}
+        macd, signal, histogram = (indicators[k] for k in ('macd','macd_signal','macd_histogram'))
     # Exclude the current bar: levels describe the preceding 20 bars.
     prior = points[-21:-1]
     support = min(p.get('low') or p['close'] for p in prior)
@@ -38,7 +41,7 @@ def explain(points, rsi):
             trend = 'yukarı eğilimli'
         elif price < emas['20'] < emas['50']:
             trend = 'aşağı eğilimli'
-    lines = [f'Genel görünüm: {trend}. Son mum kapanışı {fmt(price)}.',
+    lines = [f'Genel görünüm: {trend}. Son mum kapanışı {fmt(price)}. Fiyat ve seviyeler seçili hissenin para birimindedir.',
              'EMA 20 / 50 / 200: ' + ' / '.join(fmt(emas[str(n)]) for n in (20,50,200)) + '.']
     zone = 'değerlendirilemiyor' if rsi is None else 'aşırı alım bölgesinde; geri çekilme riski izlenmeli' if rsi >= 70 else 'aşırı satım bölgesinde; dönüş garanti değildir' if rsi <= 30 else '30–70 aralığında'
     lines.append(f'RSI 14: {fmt(rsi)}; {zone}.')
